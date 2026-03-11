@@ -20,7 +20,7 @@ const rgbToHex = (rgb: string) => {
 
 // Helper to resize large images before tracing to avoid browser freeze
 const resizeImage = (dataUrl: string, maxSize: number): Promise<string> => {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const img = new Image();
     img.onload = () => {
       let width = img.width;
@@ -42,6 +42,9 @@ const resizeImage = (dataUrl: string, maxSize: number): Promise<string> => {
       const ctx = canvas.getContext('2d');
       ctx?.drawImage(img, 0, 0, width, height);
       resolve(canvas.toDataURL('image/png'));
+    };
+    img.onerror = () => {
+      reject(new Error("Failed to load image. The file might be corrupted or not a valid image."));
     };
     img.src = dataUrl;
   });
@@ -77,9 +80,14 @@ export default function App() {
     const reader = new FileReader();
     reader.onload = async (e) => {
       const result = e.target?.result as string;
-      const resized = await resizeImage(result, 800); // Resize to max 800px for performance
-      setImageSrc(resized);
-      processImage(resized, settings);
+      try {
+        const resized = await resizeImage(result, 800); // Resize to max 800px for performance
+        setImageSrc(resized);
+        processImage(resized, settings);
+      } catch (err) {
+        alert('Failed to process image. Please ensure it is a valid image file.');
+        console.error(err);
+      }
     };
     reader.readAsDataURL(file);
   };
@@ -96,20 +104,44 @@ export default function App() {
     
     setIsLoadingUrl(true);
     try {
-      // Use a CORS proxy to avoid canvas tainting
-      const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(imageUrlInput)}`;
-      const response = await fetch(proxyUrl);
-      if (!response.ok) throw new Error('Failed to fetch image');
+      let response;
+      
+      // Attempt 1: Direct fetch (works if server has CORS headers)
+      try {
+        response = await fetch(imageUrlInput);
+      } catch (err) {
+        // Attempt 2: Use corsproxy.io
+        try {
+          const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(imageUrlInput)}`;
+          response = await fetch(proxyUrl);
+        } catch (err2) {
+          // Attempt 3: Use allorigins as fallback
+          const proxyUrl2 = `https://api.allorigins.win/raw?url=${encodeURIComponent(imageUrlInput)}`;
+          response = await fetch(proxyUrl2);
+        }
+      }
+
+      if (!response || !response.ok) throw new Error('Failed to fetch image');
       
       const blob = await response.blob();
-      if (!blob.type.startsWith('image/')) {
-        throw new Error('URL does not point to a valid image');
+      
+      // Some proxies return generic octet-stream or text/plain for images.
+      // If it's explicitly HTML or JSON, it's probably an error page.
+      if (blob.type.includes('text/html') || blob.type.includes('application/json')) {
+        throw new Error('URL returned an HTML page or JSON instead of an image.');
       }
       
-      const file = new File([blob], "image.png", { type: blob.type });
+      // Force a valid image type if the proxy stripped it, so `handleFile` accepts it.
+      // The actual image validation will happen when `Image` tries to load it in `resizeImage`.
+      let mimeType = blob.type;
+      if (!mimeType || mimeType === 'application/octet-stream' || mimeType.includes('text/')) {
+        mimeType = 'image/png';
+      }
+      
+      const file = new File([blob], "image.png", { type: mimeType });
       handleFile(file);
     } catch (error) {
-      alert('Could not load image from URL. It might be protected or invalid.');
+      alert('Could not load image from URL. It might be protected, invalid, or blocking CORS proxies.');
       console.error(error);
     } finally {
       setIsLoadingUrl(false);
