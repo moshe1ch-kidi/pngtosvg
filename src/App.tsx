@@ -7,11 +7,15 @@ declare global {
   }
 }
 
-// Helper to convert rgb() to hex
-const rgbToHex = (rgb: string) => {
-  if (rgb.startsWith('#')) return rgb;
-  const match = rgb.match(/^rgb\((\d+),\s*(\d+),\s*(\d+)\)$/);
+// Helper to convert rgb() or rgba() to hex
+const rgbToHex = (color: string) => {
+  if (!color) return '#000000';
+  if (color.startsWith('#')) return color;
+  
+  // Handle rgb and rgba
+  const match = color.match(/^rgba?\((\d+),\s*(\d+),\s*(\d+)/);
   if (!match) return '#000000';
+  
   const r = parseInt(match[1]).toString(16).padStart(2, '0');
   const g = parseInt(match[2]).toString(16).padStart(2, '0');
   const b = parseInt(match[3]).toString(16).padStart(2, '0');
@@ -54,7 +58,7 @@ export default function App() {
   const [imageSrc, setImageSrc] = useState<string | null>(null);
   const [svgString, setSvgString] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [selectedPath, setSelectedPath] = useState<SVGElement | null>(null);
+  const [selectedPathId, setSelectedPathId] = useState<string | null>(null);
   const [selectedColor, setSelectedColor] = useState<string>('#000000');
   const [imageUrlInput, setImageUrlInput] = useState('');
   const [isLoadingUrl, setIsLoadingUrl] = useState(false);
@@ -155,14 +159,22 @@ export default function App() {
     }
 
     setIsProcessing(true);
-    setSelectedPath(null);
+    setSelectedPathId(null);
 
     // Use setTimeout to allow UI to render the loading state before blocking thread
     setTimeout(() => {
       window.ImageTracer.imageToSVG(
         dataUrl,
         (svgstr: string) => {
-          setSvgString(svgstr);
+          // Parse the SVG string to add unique IDs to all paths
+          const parser = new DOMParser();
+          const doc = parser.parseFromString(svgstr, 'image/svg+xml');
+          const elements = doc.querySelectorAll('path, polygon, rect');
+          elements.forEach((el, index) => {
+            el.id = `svg-path-${index}`;
+          });
+          
+          setSvgString(new XMLSerializer().serializeToString(doc));
           setIsProcessing(false);
         },
         {
@@ -186,30 +198,58 @@ export default function App() {
     }
   };
 
+  // Ensure the selected path always has the selected class and is brought to front
+  useEffect(() => {
+    if (svgContainerRef.current) {
+      // Remove from all first
+      const allSelected = svgContainerRef.current.querySelectorAll('.selected');
+      allSelected.forEach(el => el.classList.remove('selected'));
+      
+      // Add to the correct one
+      if (selectedPathId) {
+        const el = svgContainerRef.current.querySelector(`#${selectedPathId}`);
+        if (el) {
+          el.classList.add('selected');
+          // Bring to front so the stroke isn't hidden by adjacent paths
+          el.parentNode?.appendChild(el);
+        }
+      }
+    }
+  }, [selectedPathId, svgString]);
+
   const handleSvgClick = (e: React.MouseEvent) => {
     const target = e.target as SVGElement;
     const tagName = target.tagName.toLowerCase();
     
     if (tagName === 'path' || tagName === 'polygon' || tagName === 'rect') {
       // Remove selection from previous
-      if (selectedPath) {
-        selectedPath.classList.remove('selected');
+      if (selectedPathId && svgContainerRef.current) {
+        const prev = svgContainerRef.current.querySelector(`#${selectedPathId}`);
+        if (prev) prev.classList.remove('selected');
       }
       
       // Select new
       target.classList.add('selected');
-      setSelectedPath(target);
+      target.parentNode?.appendChild(target); // Bring to front immediately
+      setSelectedPathId(target.id);
       
       // Extract color
-      const fill = target.getAttribute('fill');
-      if (fill) {
+      const fill = target.getAttribute('fill') || target.style.fill;
+      if (fill && fill !== 'none') {
         setSelectedColor(rgbToHex(fill));
+      } else {
+        // If no fill, maybe it has a stroke
+        const stroke = target.getAttribute('stroke') || target.style.stroke;
+        if (stroke && stroke !== 'none') {
+          setSelectedColor(rgbToHex(stroke));
+        }
       }
     } else {
       // Deselect if clicking outside a path
-      if (selectedPath) {
-        selectedPath.classList.remove('selected');
-        setSelectedPath(null);
+      if (selectedPathId && svgContainerRef.current) {
+        const prev = svgContainerRef.current.querySelector(`#${selectedPathId}`);
+        if (prev) prev.classList.remove('selected');
+        setSelectedPathId(null);
       }
     }
   };
@@ -218,10 +258,28 @@ export default function App() {
     const newColor = e.target.value;
     setSelectedColor(newColor);
     
-    if (selectedPath) {
-      selectedPath.setAttribute('fill', newColor);
-      if (selectedPath.hasAttribute('stroke')) {
-        selectedPath.setAttribute('stroke', newColor);
+    if (selectedPathId && svgContainerRef.current) {
+      const path = svgContainerRef.current.querySelector(`#${selectedPathId}`) as SVGElement;
+      if (path) {
+        // Update attribute
+        path.setAttribute('fill', newColor);
+        // Also update inline style just in case
+        path.style.fill = newColor;
+        
+        if (path.hasAttribute('stroke') || path.style.stroke) {
+          path.setAttribute('stroke', newColor);
+          path.style.stroke = newColor;
+        }
+        
+        // Sync to svgString so React doesn't overwrite it on re-render
+        const svgElement = svgContainerRef.current.querySelector('svg');
+        if (svgElement) {
+          // Clone to avoid saving the 'selected' class
+          const clone = svgElement.cloneNode(true) as SVGSVGElement;
+          const selected = clone.querySelector('.selected');
+          if (selected) selected.classList.remove('selected');
+          setSvgString(new XMLSerializer().serializeToString(clone));
+        }
       }
     }
   };
@@ -348,14 +406,14 @@ export default function App() {
           ) : (
             <div className="flex-1 flex flex-col h-full relative">
               {/* Toolbar */}
-              <div className="h-12 border-b border-gray-100 flex items-center px-4 justify-between bg-white shrink-0">
+              <div className="h-12 border-b border-gray-100 flex items-center px-4 justify-between bg-white shrink-0" dir="rtl">
                 <div className="flex items-center gap-2 text-sm font-medium text-gray-600">
                   <ImageIcon className="w-4 h-4" />
-                  Comparison View
+                  תצוגת השוואה
                 </div>
                 <div className="flex items-center gap-2 text-xs text-gray-500">
                   <MousePointer2 className="w-3 h-3" />
-                  Click any shape in the SVG to edit its color
+                  לחץ על צורה ב-SVG כדי לשנות את צבעה
                 </div>
               </div>
 
@@ -553,15 +611,15 @@ export default function App() {
           </div>
 
           {/* Color Editor Panel */}
-          <div className={`bg-white rounded-2xl shadow-sm border border-gray-200 p-5 transition-opacity duration-200 ${!selectedPath ? 'opacity-50' : 'opacity-100'}`}>
+          <div className={`bg-white rounded-2xl shadow-sm border border-gray-200 p-5 transition-opacity duration-200 ${!selectedPathId ? 'opacity-50' : 'opacity-100'}`} dir="rtl">
             <div className="flex items-center gap-2 mb-5">
               <Palette className="w-5 h-5 text-gray-700" />
-              <h2 className="font-semibold">Color Editor</h2>
+              <h2 className="font-semibold text-gray-900">עורך צבעים</h2>
             </div>
             
-            {selectedPath ? (
+            {selectedPathId ? (
               <div className="space-y-4">
-                <p className="text-sm text-gray-600">Change the color of the selected shape:</p>
+                <p className="text-sm text-gray-600">שנה את הצבע של הצורה שבחרת (השינוי מיידי):</p>
                 <div className="flex items-center gap-3">
                   <div className="relative w-12 h-12 rounded-lg overflow-hidden border border-gray-200 shadow-sm shrink-0">
                     <input 
@@ -583,7 +641,8 @@ export default function App() {
                           setSelectedColor(val);
                         }
                       }}
-                      className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm font-mono uppercase focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm font-mono uppercase focus:outline-none focus:ring-2 focus:ring-blue-500 text-left"
+                      dir="ltr"
                     />
                   </div>
                 </div>
@@ -591,20 +650,20 @@ export default function App() {
             ) : (
               <div className="py-6 text-center">
                 <MousePointer2 className="w-8 h-8 text-gray-300 mx-auto mb-2" />
-                <p className="text-sm text-gray-500">Click on any shape in the SVG preview to edit its color.</p>
+                <p className="text-sm text-gray-500">לחץ על צורה כלשהי בתמונה הווקטורית כדי לערוך את הצבע שלה.</p>
               </div>
             )}
           </div>
 
           {/* Export Panel */}
-          <div className="mt-auto">
+          <div className="mt-auto" dir="rtl">
             <button
               onClick={downloadSvg}
               disabled={!svgString || isProcessing}
               className="w-full py-3.5 bg-blue-600 text-white rounded-xl font-medium shadow-sm hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center justify-center gap-2"
             >
               <Download className="w-5 h-5" />
-              Download SVG
+              הורד קובץ SVG
             </button>
           </div>
 
