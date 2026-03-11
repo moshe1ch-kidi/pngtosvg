@@ -1,0 +1,31 @@
+@import "tailwindcss";
+
+.svg-editor-container svg {
+  max-width: 100%;
+  max-height: 100%;
+  width: auto;
+  height: auto;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05);
+  background-color: white;
+  border-radius: 8px;
+  cursor: crosshair;
+}
+
+.svg-editor-container path,
+.svg-editor-container polygon,
+.svg-editor-container rect {
+  transition: opacity 0.1s;
+}
+
+.svg-editor-container path:hover,
+.svg-editor-container polygon:hover,
+.svg-editor-container rect:hover {
+  opacity: 0.7;
+}
+
+.svg-editor-container .selected {
+  stroke: #3b82f6 !important;
+  stroke-width: 2px !important;
+  vector-effect: non-scaling-stroke;
+  opacity: 1 !important;
+}

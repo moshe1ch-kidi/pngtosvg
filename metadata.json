@@ -1,0 +1,5 @@
+{
+  "name": "PNG to SVG Converter",
+  "description": "Convert PNG images to color-preserved SVG files with a built-in editor.",
+  "requestFramePermissions": []
+}
