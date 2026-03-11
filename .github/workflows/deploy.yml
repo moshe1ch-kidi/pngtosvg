@@ -1,10 +1,9 @@
-name: Deploy to GitHub Pages
+ name: Deploy to GitHub Pages
 
 on:
   push:
     branches: ["main"]
 
-# הגדרה להעלמת אזהרות Deprecation ומעבר ל-Node 24
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
@@ -23,7 +22,7 @@ jobs:
       - name: Install Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 24 # עדכון לגרסה העדכנית ביותר
+          node-version: 22
           cache: 'npm'
 
       - name: Install dependencies
