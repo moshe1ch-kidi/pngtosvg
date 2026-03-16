@@ -67,7 +67,7 @@ export default function App() {
     numberofcolors: 17,
     ltres: 1.0,
     qtres: 1.0,
-    pathomit: 8,
+    pathomit: 2,
     blurradius: 0,
     colorSampling: 'deterministic'
   });
@@ -87,7 +87,6 @@ export default function App() {
       try {
         const resized = await resizeImage(result, 800); // Resize to max 800px for performance
         setImageSrc(resized);
-        processImage(resized, settings);
       } catch (err) {
         alert('Failed to process image. Please ensure it is a valid image file.');
         console.error(err);
@@ -152,6 +151,17 @@ export default function App() {
     }
   };
 
+  // Auto-apply settings with debounce
+  useEffect(() => {
+    if (!imageSrc) return;
+
+    const timer = setTimeout(() => {
+      processImage(imageSrc, settings);
+    }, 400); // 400ms debounce to avoid excessive processing while dragging sliders
+
+    return () => clearTimeout(timer);
+  }, [settings, imageSrc]);
+
   const processImage = (dataUrl: string, currentSettings: typeof settings) => {
     if (!window.ImageTracer) {
       alert("ImageTracer library is still loading. Please try again in a moment.");
@@ -172,6 +182,14 @@ export default function App() {
           const elements = doc.querySelectorAll('path, polygon, rect');
           elements.forEach((el, index) => {
             el.id = `svg-path-${index}`;
+            
+            // Fix white spots/gaps by adding a tiny stroke of the same color
+            const fill = el.getAttribute('fill');
+            if (fill && fill !== 'none') {
+              el.setAttribute('stroke', fill);
+              el.setAttribute('stroke-width', '0.5');
+              el.setAttribute('stroke-linejoin', 'round');
+            }
           });
           
           setSvgString(new XMLSerializer().serializeToString(doc));
@@ -187,15 +205,10 @@ export default function App() {
           strokewidth: 1,
           linefilter: true,
           viewbox: true,
+          roundcoords: 2,
         }
       );
     }, 50);
-  };
-
-  const handleApplySettings = () => {
-    if (imageSrc) {
-      processImage(imageSrc, settings);
-    }
   };
 
   // Ensure the selected path always has the selected class and is brought to front
@@ -312,7 +325,7 @@ export default function App() {
   const resetApp = () => {
     setImageSrc(null);
     setSvgString(null);
-    setSelectedPath(null);
+    setSelectedPathId(null);
   };
 
   return (
@@ -599,14 +612,6 @@ export default function App() {
                   <option value="kmeans">K-Means (מדויק יותר)</option>
                 </select>
               </div>
-
-              <button
-                onClick={handleApplySettings}
-                disabled={!imageSrc || isProcessing}
-                className="w-full py-2.5 bg-gray-900 text-white rounded-xl font-medium text-sm hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors mt-2"
-              >
-                החל שינויים
-              </button>
             </div>
           </div>
 
