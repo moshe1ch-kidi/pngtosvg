@@ -64,11 +64,11 @@ export default function App() {
   const [isLoadingUrl, setIsLoadingUrl] = useState(false);
   
   const [settings, setSettings] = useState({
-    numberofcolors: 17,
+    numberofcolors: 12,
     ltres: 1.0,
     qtres: 1.0,
-    pathomit: 2,
-    blurradius: 0,
+    pathomit: 32,
+    blurradius: 2,
     colorSampling: 'deterministic'
   });
 
@@ -180,6 +180,13 @@ export default function App() {
           const parser = new DOMParser();
           const doc = parser.parseFromString(svgstr, 'image/svg+xml');
           const elements = doc.querySelectorAll('path, polygon, rect');
+          
+          // Set rendering property to avoid gaps
+          const svgEl = doc.querySelector('svg');
+          if (svgEl) {
+            svgEl.setAttribute('shape-rendering', 'geometricPrecision');
+          }
+
           elements.forEach((el, index) => {
             el.id = `svg-path-${index}`;
             
@@ -187,8 +194,10 @@ export default function App() {
             const fill = el.getAttribute('fill');
             if (fill && fill !== 'none') {
               el.setAttribute('stroke', fill);
-              el.setAttribute('stroke-width', '0.5');
+              el.setAttribute('stroke-width', '1.5');
               el.setAttribute('stroke-linejoin', 'round');
+              el.setAttribute('stroke-linecap', 'round');
+              el.setAttribute('paint-order', 'stroke fill');
             }
           });
           
@@ -202,10 +211,10 @@ export default function App() {
           pathomit: currentSettings.pathomit,
           blurradius: currentSettings.blurradius,
           colorquantcycles: currentSettings.colorSampling === 'deterministic' ? 1 : 3,
-          strokewidth: 1,
+          strokewidth: 1.0,
           linefilter: true,
           viewbox: true,
-          roundcoords: 2,
+          roundcoords: 3,
         }
       );
     }, 50);
@@ -326,6 +335,7 @@ export default function App() {
     setImageSrc(null);
     setSvgString(null);
     setSelectedPathId(null);
+    setImageUrlInput('');
   };
 
   return (
@@ -345,10 +355,10 @@ export default function App() {
         {imageSrc && (
           <button
             onClick={resetApp}
-            className="text-sm font-medium text-gray-600 hover:text-gray-900 flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-gray-100 transition-colors"
+            className="text-sm font-bold text-blue-600 hover:text-blue-700 flex items-center gap-2 px-4 py-2 rounded-xl bg-blue-50 hover:bg-blue-100 transition-all shadow-sm border border-blue-100"
           >
             <RefreshCw className="w-4 h-4" />
-            Start Over
+            תמונה חדשה
           </button>
         )}
       </header>
