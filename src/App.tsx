@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Upload, Download, Settings, Palette, Image as ImageIcon, Loader2, MousePointer2, RefreshCw, Link } from 'lucide-react';
+import { Upload, Download, Settings, Palette, Image as ImageIcon, Loader2, MousePointer2, RefreshCw, Link, Film, FlipHorizontal } from 'lucide-react';
+import { GifReader } from 'omggif';
 
 declare global {
   interface Window {
@@ -62,6 +63,8 @@ export default function App() {
   const [selectedColor, setSelectedColor] = useState<string>('#000000');
   const [imageUrlInput, setImageUrlInput] = useState('');
   const [isLoadingUrl, setIsLoadingUrl] = useState(false);
+  const [isAnimatedGif, setIsAnimatedGif] = useState(false);
+  const [gifProgress, setGifProgress] = useState({ current: 0, total: 0 });
   
   const [settings, setSettings] = useState({
     numberofcolors: 12,
@@ -69,7 +72,8 @@ export default function App() {
     qtres: 1.0,
     pathomit: 32,
     blurradius: 2,
-    colorSampling: 'deterministic'
+    colorSampling: 'deterministic',
+    frameDelay: 100 // ms per frame
   });
 
   const svgContainerRef = useRef<HTMLDivElement>(null);
@@ -77,7 +81,27 @@ export default function App() {
 
   const handleFile = async (file: File) => {
     if (!file.type.startsWith('image/')) {
-      alert('Please upload a valid image file (PNG/JPG).');
+      alert('Please upload a valid image file (PNG/JPG/GIF).');
+      return;
+    }
+
+    if (file.type === 'image/gif') {
+      const reader = new FileReader();
+      reader.onload = async (e) => {
+        const buffer = e.target?.result as ArrayBuffer;
+        try {
+          const uint8 = new Uint8Array(buffer);
+          const gifReader = new GifReader(uint8);
+          setIsAnimatedGif(true);
+          // Store the raw buffer for processing
+          const dataUrl = URL.createObjectURL(file);
+          setImageSrc(dataUrl);
+        } catch (err) {
+          alert('Failed to process GIF. It might be corrupted.');
+          console.error(err);
+        }
+      };
+      reader.readAsArrayBuffer(file);
       return;
     }
     
@@ -156,11 +180,114 @@ export default function App() {
     if (!imageSrc) return;
 
     const timer = setTimeout(() => {
-      processImage(imageSrc, settings);
-    }, 400); // 400ms debounce to avoid excessive processing while dragging sliders
+      if (isAnimatedGif) {
+        processAnimatedGif(imageSrc, settings);
+      } else {
+        processImage(imageSrc, settings);
+      }
+    }, 400); 
 
     return () => clearTimeout(timer);
-  }, [settings, imageSrc]);
+  }, [settings, imageSrc, isAnimatedGif]);
+
+  const processAnimatedGif = async (url: string, currentSettings: typeof settings) => {
+    if (!window.ImageTracer) return;
+
+    setIsProcessing(true);
+    setSelectedPathId(null);
+    
+    try {
+      const response = await fetch(url);
+      const buffer = await response.arrayBuffer();
+      const uint8 = new Uint8Array(buffer);
+      const gifReader = new GifReader(uint8);
+      
+      const numFrames = gifReader.numFrames();
+      setGifProgress({ current: 0, total: numFrames });
+      
+      const frameSvgs: string[] = [];
+      const width = gifReader.width;
+      const height = gifReader.height;
+      
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d')!;
+      let previousImageData = ctx.createImageData(width, height);
+
+      for (let i = 0; i < numFrames; i++) {
+        setGifProgress({ current: i + 1, total: numFrames });
+        
+        const frameInfo = gifReader.frameInfo(i);
+        const frameData = new Uint8ClampedArray(width * height * 4);
+        gifReader.decodeAndBlitFrameRGBA(i, frameData);
+        
+        // Handle transparency and disposal methods if needed, 
+        // but for a basic version we just draw the frame
+        const imageData = new ImageData(frameData, width, height);
+        ctx.putImageData(imageData, 0, 0);
+        
+        const frameDataUrl = canvas.toDataURL('image/png');
+        
+        const svgStr = await new Promise<string>((resolve) => {
+          window.ImageTracer.imageToSVG(frameDataUrl, resolve, {
+            numberofcolors: currentSettings.numberofcolors,
+            ltres: currentSettings.ltres,
+            qtres: currentSettings.qtres,
+            pathomit: currentSettings.pathomit,
+            blurradius: currentSettings.blurradius,
+            colorquantcycles: currentSettings.colorSampling === 'deterministic' ? 1 : 3,
+            strokewidth: 1.0,
+            linefilter: true,
+            viewbox: true,
+            roundcoords: 3,
+            background: false, // Ensure transparent background
+            desc: false, // No extra metadata
+          });
+        });
+        
+        // Extract only the content inside the SVG tag
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(svgStr, 'image/svg+xml');
+        const content = Array.from(doc.querySelector('svg')!.childNodes)
+          .map(node => new XMLSerializer().serializeToString(node))
+          .join('');
+        
+        frameSvgs.push(content);
+      }
+
+      // Combine frames into one animated SVG
+      // We use CSS animation to toggle visibility of groups
+      const frameDelaySeconds = currentSettings.frameDelay / 1000;
+      const duration = numFrames * frameDelaySeconds;
+      const framePercent = 100 / numFrames;
+      
+      // The keyframes should just toggle visibility for a single frame's duration
+      let animationCss = `@keyframes gif-anim {
+        0%, ${framePercent}% { opacity: 1; visibility: visible; pointer-events: auto; }
+        ${framePercent + 0.01}%, 100% { opacity: 0; visibility: hidden; pointer-events: none; }
+      }`;
+
+      let combinedSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" shape-rendering="geometricPrecision" style="background: transparent;">
+        <style>
+          .frame { opacity: 0; visibility: hidden; pointer-events: none; animation: gif-anim ${duration}s infinite; }
+          ${animationCss}
+        </style>`;
+      
+      frameSvgs.forEach((content, i) => {
+        combinedSvg += `<g class="frame" style="animation-delay: ${i * frameDelaySeconds}s">${content}</g>`;
+      });
+      
+      combinedSvg += `</svg>`;
+      
+      setSvgString(combinedSvg);
+    } catch (err) {
+      console.error(err);
+      alert('Error processing animated GIF');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
 
   const processImage = (dataUrl: string, currentSettings: typeof settings) => {
     if (!window.ImageTracer) {
@@ -185,6 +312,7 @@ export default function App() {
           const svgEl = doc.querySelector('svg');
           if (svgEl) {
             svgEl.setAttribute('shape-rendering', 'geometricPrecision');
+            svgEl.style.background = 'transparent';
           }
 
           elements.forEach((el, index) => {
@@ -215,6 +343,8 @@ export default function App() {
           linefilter: true,
           viewbox: true,
           roundcoords: 3,
+          background: false, // Ensure transparent background
+          desc: false, // No extra metadata
         }
       );
     }, 50);
@@ -306,6 +436,35 @@ export default function App() {
     }
   };
 
+  const flipHorizontal = () => {
+    if (!svgString) return;
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(svgString, 'image/svg+xml');
+    const svg = doc.querySelector('svg');
+    if (!svg) return;
+
+    const viewBox = svg.getAttribute('viewBox');
+    if (!viewBox) return;
+    const parts = viewBox.split(' ').map(Number);
+    const width = parts[2];
+
+    // Create a wrapper group for flipping
+    const wrapper = doc.createElementNS('http://www.w3.org/2000/svg', 'g');
+    wrapper.setAttribute('transform', `scale(-1, 1) translate(-${width}, 0)`);
+
+    // Move all children except <style> and <defs> into the wrapper
+    const children = Array.from(svg.childNodes);
+    children.forEach(child => {
+      if (child.nodeName !== 'style' && child.nodeName !== 'defs') {
+        wrapper.appendChild(child);
+      }
+    });
+
+    svg.appendChild(wrapper);
+    setSvgString(new XMLSerializer().serializeToString(doc));
+    setSelectedPathId(null);
+  };
+
   const downloadSvg = () => {
     if (!svgContainerRef.current) return;
     const svgElement = svgContainerRef.current.querySelector('svg');
@@ -336,6 +495,7 @@ export default function App() {
     setSvgString(null);
     setSelectedPathId(null);
     setImageUrlInput('');
+    setIsAnimatedGif(false);
   };
 
   return (
@@ -446,7 +606,7 @@ export default function App() {
                 {/* Left Pane: Original Image */}
                 <div className="flex-1 flex flex-col border-b md:border-b-0 md:border-r border-gray-200 bg-gray-50/30 relative">
                   <div className="absolute top-3 left-3 bg-white/80 backdrop-blur-sm px-2.5 py-1 rounded-md text-xs font-semibold text-gray-600 shadow-sm z-10 border border-gray-200/50">
-                    Original PNG
+                    {isAnimatedGif ? 'Original GIF' : 'Original PNG'}
                   </div>
                   <div className="flex-1 overflow-auto p-6 flex items-center justify-center">
                     <img 
@@ -458,15 +618,19 @@ export default function App() {
                 </div>
 
                 {/* Right Pane: SVG Canvas */}
-                <div className="flex-1 flex flex-col bg-gray-50/80 relative">
+                <div className="flex-1 flex flex-col bg-gray-100 relative">
                   <div className="absolute top-3 left-3 bg-white/80 backdrop-blur-sm px-2.5 py-1 rounded-md text-xs font-semibold text-blue-600 shadow-sm z-10 border border-blue-100">
-                    Vectorized SVG
+                    {isAnimatedGif ? 'Animated SVG' : 'Vectorized SVG'}
                   </div>
                   <div className="flex-1 overflow-auto p-6 flex items-center justify-center relative">
                     {isProcessing ? (
                       <div className="flex flex-col items-center justify-center text-blue-600">
                         <Loader2 className="w-10 h-10 animate-spin mb-4" />
-                        <p className="font-medium animate-pulse">Vectorizing image...</p>
+                        <p className="font-medium animate-pulse">
+                          {isAnimatedGif 
+                            ? `Processing frame ${gifProgress.current} of ${gifProgress.total}...` 
+                            : 'Vectorizing image...'}
+                        </p>
                         <p className="text-xs text-gray-500 mt-2">This might take a few seconds</p>
                       </div>
                     ) : svgString ? (
@@ -495,8 +659,9 @@ export default function App() {
               <h2 className="font-semibold text-gray-900">הגדרות המרה</h2>
             </div>
             
-            <div className="bg-blue-50 text-blue-800 text-xs font-medium px-3 py-2 rounded-lg mb-5 border border-blue-100 text-center">
-              טרייסניג צבעוני מלא — שומר על צבעי התמונה המקורית
+            <div className="bg-blue-50 text-blue-800 text-xs font-medium px-3 py-2 rounded-lg mb-5 border border-blue-100 text-center flex items-center justify-center gap-2">
+              {isAnimatedGif ? <Film className="w-3 h-3" /> : null}
+              {isAnimatedGif ? 'אנימציית GIF מזוהה — המרה סדרתית' : 'טרייסניג צבעוני מלא — שומר על צבעי התמונה המקורית'}
             </div>
             
             <div className="space-y-5">
@@ -622,6 +787,27 @@ export default function App() {
                   <option value="kmeans">K-Means (מדויק יותר)</option>
                 </select>
               </div>
+
+              {/* Animation Speed (Only for GIF) */}
+              {isAnimatedGif && (
+                <div className="pt-2 border-t border-gray-100">
+                  <div className="flex justify-between mb-1">
+                    <label className="text-sm font-semibold text-blue-700">מהירות אנימציה (מ"ש לפריים)</label>
+                    <span className="text-xs font-mono bg-blue-100 px-2 py-0.5 rounded text-blue-700" dir="ltr">{settings.frameDelay}ms</span>
+                  </div>
+                  <input 
+                    type="range" min="20" max="500" step="10"
+                    value={settings.frameDelay}
+                    onChange={(e) => setSettings({...settings, frameDelay: parseInt(e.target.value)})}
+                    className="w-full accent-blue-600"
+                    disabled={isProcessing}
+                  />
+                  <div className="flex justify-between text-[10px] text-gray-500 mt-1">
+                    <span>מהיר (20ms)</span>
+                    <span>איטי (500ms)</span>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
 
@@ -671,7 +857,15 @@ export default function App() {
           </div>
 
           {/* Export Panel */}
-          <div className="mt-auto" dir="rtl">
+          <div className="mt-auto space-y-3" dir="rtl">
+            <button
+              onClick={flipHorizontal}
+              disabled={!svgString || isProcessing}
+              className="w-full py-2.5 bg-white text-gray-700 border border-gray-200 rounded-xl font-medium shadow-sm hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center justify-center gap-2"
+            >
+              <FlipHorizontal className="w-4 h-4" />
+              היפוך אופקי (Mirror)
+            </button>
             <button
               onClick={downloadSvg}
               disabled={!svgString || isProcessing}
